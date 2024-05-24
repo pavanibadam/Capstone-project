@@ -1,0 +1,194 @@
+---
+title: " Los Angeles Crime Data Analysis"
+author: "Pavani Badam"
+date: "2024-04-30"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(cluster)
+library(factoextra)
+library(leaflet)
+```
+
+
+```{r}
+#Reading the data
+setwd("C:/Users/badam/Desktop/Business Capstone")
+crime_data <- read.csv("Crime_Data.csv", header = TRUE)
+
+print(colnames(crime_data))
+summary(crime_data)
+```
+
+
+
+```{r}
+#Data Cleaning
+crime_data <- na.omit(crime_data) #Removing missing values 
+crime_data <- crime_data %>% filter(crime_data$Vict.Age > 0 & crime_data$Vict.Sex %in% c("F","M","X","H"))  #Removing the rows where victim.age is 0 and victim sex is not included
+
+#Formatting Date and Time
+
+crime_data$DATE.OCC <- as.Date(crime_data$DATE.OCC, format = "%m/%d/%Y")
+crime_data$Date.Rptd <- as.Date(crime_data$Date.Rptd, format = "%m/%d/%Y")
+crime_data$TIME.OCC <- paste0(substr(sprintf("%04d",crime_data$TIME.OCC), 1, 2), ":", substr(sprintf("%04d", crime_data$TIME.OCC), 3, 4))
+crime_data$TIME.OCC <- strptime(crime_data$TIME.OCC, format = "%H:%M")
+time_parsed <- as.POSIXct(crime_data$TIME.OCC, format = "%H:%M")
+crime_data$TIME.OCC <- format(time_parsed, format = "%H:%M")
+
+sum(is.na(crime_data))
+summary(crime_data)
+```
+
+```{r}
+#Exploratory Data Analysis
+
+
+####Bar-Plot###
+ggplot(crime_data, aes(x = AREA.NAME)) +
+  geom_bar(position = "identity", alpha = 0.7, fill = "pink", color = "blue") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Distribution of Crimes Across Areas") +
+  xlab("Area")
+
+
+####Pie-Chart ###
+crime_count_by_sex <- table(crime_data$Vict.Sex)
+crime_count_by_sex_df <- as.data.frame(crime_count_by_sex)      # Convert counts to a data frame
+names(crime_count_by_sex_df) <- c("Vict.Sex", "Count")
+crime_count_by_sex_df <- crime_count_by_sex_df %>%
+  mutate(Percentage = round(Count / sum(Count) * 100, 1))
+
+ggplot(crime_count_by_sex_df, aes(x = "", y = Count, fill = Vict.Sex)) +
+  geom_bar(stat = "identity", width = 1) +
+  geom_text(aes(label = paste0(Percentage, "%")), position = position_stack(vjust = 0.5), size = 4) +  
+  coord_polar("y") +
+  labs(title = "Crime Percentage by Sex", fill = "Sex") +
+  theme_void() +
+  scale_fill_manual(values = c("blue", "red","yellow","darkgreen")) 
+
+
+
+####Bar-Plot###
+Statusdescdata <- crime_data[!(crime_data$Status.Desc %in% c("Adult Arrest", "Adult Other", "Juv Arrest", "Juv Other", "UNK")), ]
+crime_count <- Statusdescdata %>% group_by(TIME.OCC) %>% count()
+crime_count$TIME.OCC <- paste0(substr(crime_count$TIME.OCC, 1, 2), ":", "00")
+ggplot(crime_count, aes(x = crime_count$TIME.OCC, y = n)) +
+  geom_bar(stat = "identity", fill = "brown") +
+  labs(x = "Hourly Interval", y = "Crime Count", title = "Crime Count by Hourly Interval") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+#From this data exploration we can see that Crimes are happening more at Central Area 
+#We can also see that highest numbers of crimes happened at 12:00pm
+ 
+```
+
+
+```{r}
+###Correlation Analysis###
+
+crime_data_numeric <- crime_data[, sapply(crime_data, is.numeric)]
+
+# Compute the correlation matrix
+correlation_matrix <- cor(crime_data_numeric)
+
+# Print the correlation matrix
+print(correlation_matrix)
+corrplot(correlation_matrix, method = "circle") 
+
+#The correlation coefficient between AREA and Rpt.Dist.No is approximately 1. This indicates a very strong positive linear relationship between these two variables
+#LAT and LON have a strong negative correlation coefficient of approximately -1. This indicates a strong negative linear relationship between latitude and longitude, which is expected as they represent geographic coordinates
+```
+
+
+```{r}
+
+#In unsupervised learning, we perform principal component analysis (PCA) to do dimensionality reduction or feature extraction which simplify the dataset and find the most informative representations of the data. . 
+
+# Perform PCA
+pca_result <- prcomp(crime_data_numeric, scale. = TRUE)
+
+# Extract the principal components
+principal_components <- pca_result$x
+
+# Explore the variance explained by each principal component
+summary(pca_result)
+
+#1. PC1 and PC2 together explain approximately 66.69% of the total variance in the data.
+#2. PC1 has a higher standard deviation and proportion of variance explained compared to PC2.
+#3. PC3, PC4, and subsequent components explain a smaller proportion of variance and have lower importance in capturing the variability in the data.
+
+```
+
+
+
+```{r}
+
+###Cluster Analysis###
+
+#Use the Hopkins Stat(to see if it is "clusterable"
+crime_data_sample <- sample(1:nrow(crime_data), size = 500)
+crime_data_sample <- as.data.frame(crime_data_sample)
+res <- get_clust_tendency(crime_data_sample, n = nrow(crime_data_sample)-1,
+                          graph = TRUE)
+res$hopkins_stat
+
+```
+
+```{r}
+wcss_values <- numeric(length = 10)  # Assume maximum k is 10
+for (k in 1:10) {
+  kmeans_model <- kmeans(crime_data_numeric, centers = k)
+  wcss_values[k] <- sum(kmeans_model$withinss)
+}
+
+plot(1:10, wcss_values, type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters (k)", ylab = "Within-cluster sum of squares (WCSS)")
+
+#This makes sense intuitively - as you split the data into more and more clusters, the within-cluster sum of squares will continue to decrease.In the below plot, it's difficult to pinpoint an exact elbow point. However, there seems to be a bend around 4 or 5 clusters, which could be considered a reasonable choice for k. 
+```
+
+```{r}
+#Los Angeles Map
+losangeles.map <- leaflet() %>%
+  addTiles() %>%  
+  setView(lng = -118.2437, lat = 34.0522, zoom = 11)
+
+# K-Means Clustering with k=5
+crime_data_numeric <- crime_data[, sapply(crime_data, is.numeric)]
+scaled_features <- scale(crime_data_numeric)
+kmeans_model <- kmeans(scaled_features, centers = 5)
+crime_data_numeric$cluster <- as.factor(kmeans_model$cluster) 
+
+
+losangeles.map %>%
+  addMarkers(lng = crime_data_numeric$LON, lat = crime_data_numeric$LAT, clusterOptions = markerClusterOptions())
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
